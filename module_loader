@@ -1,0 +1,79 @@
+#!/bin/bash
+
+############################################# LICENCE ##############################################
+
+#   Copyright (C) 2018, Ivan Balevic
+
+#   This file is part of the "Bash Modules" project, a collection
+#   of Bash scripts that provides additional functionality.
+#
+#   "Bash Modules" is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   "Bash Modules" is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with "Bash Modules". If not, see <http://www.gnu.org/licenses/>.
+
+########################################### DESCRIPTION ############################################
+
+#   This script contains "load_modules" function that should be used for sourcing of bash modules.
+
+####################################### AVAILABLE FUNCTIONS ########################################
+
+#   load_modules    ->  Sources the requested modules if they aren't sourced already.
+
+########################################### REQUIREMENTS ###########################################
+
+# If path to modules isn't provided, assume that modules are in the same directory as this script.
+BASH_MODULES_PATH="${BASH_MODULES_PATH:-"$(realpath "$(dirname "${BASH_SOURCE[0]}")")"}"
+
+######################################### DEFAULT SETTINGS #########################################
+
+# If this script is sourced by the module, then that module should by default be counted as sourced.
+[[ "${BASH_SOURCE[1]}" =~ _module$ ]] && export "$(basename ${BASH_SOURCE[1]^^})_LOADED"
+
+############################################ FUNCTIONS #############################################
+
+# load_modules [${1} ... ${N}]
+#
+#   Description                 ->  Source bash modules [${1} ... ${N}] if they aren't sourced yet.
+#                                   The variable with name coresponding to the successfully sourced
+#                                   module will be exported afterwards to prevent later attempts to
+#                                   load the same module again.
+#
+#   [${1} ... ${N}]             ->  Names of the bash modules that need to be sourced.
+#                                   The suffix "_module" may be excluded from the module name.
+#
+#   <=  BASH_MODULES_PATH       ->  The path where this function will look for requested modules.
+#
+#   =>  ${X}[_MODULE]_LOADED    ->  For each loaded module, variable like this is exported:
+#                                   ${X}='color_module' =>  COLOR_MODULE_LOADED
+#                                   ${X}='debug'        =>  DEBUG_MODULE_LOADED
+#                                   ${X}='fancy'        =>  FANCY_MODULE_LOADED
+#
+#   return                      ->  Exit with 1 if sourcing of any module fails.
+#                                   Return 0 otherwise.
+#
+function load_modules()
+{
+    local module_name module_loaded_flag
+    for module_name in "${@}"; do
+        # Remove the suffix "_module" from the current module name.
+        module_name="${module_name//_module/}"
+
+        # Generate the variable name that should indicate if this module is sourced already.
+        module_loaded_flag="${module_name^^}_MODULE_LOADED"
+
+        # If the generated variable name doesn't exist already, export it and source the module.
+        if ! declare -p "${module_loaded_flag}" &> /dev/null; then
+            export "${module_loaded_flag}"
+            source "${BASH_MODULES_PATH}/${module_name}_module" || exit 1
+        fi
+    done
+}

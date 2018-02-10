@@ -1,0 +1,1304 @@
+#!/bin/bash
+
+############################################# LICENCE ##############################################
+
+#   Copyright (C) 2018, Ivan Balevic
+
+#   This file is part of the "Bash Modules" project, a collection
+#   of Bash scripts that provides additional functionality.
+#
+#   "Bash Modules" is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   "Bash Modules" is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with "Bash Modules". If not, see <http://www.gnu.org/licenses/>.
+
+########################################### DESCRIPTION ############################################
+
+#   This module is desined to help with error prevention as well as debugging process.
+
+####################################### AVAILABLE FUNCTIONS ########################################
+
+# MODULE FUNCTIONS:
+
+#   encapsulate_this_function       ->  Prevents the use of function outside of the script.
+#   print_stack                     ->  Prints the script and function call stack.
+#   error                           ->  Calls *print_stack*, pints error message and exits with 1.
+#   error_if_not_natural_number     ->  Calls *error* if given argument isn't a natural(N0) number.
+#   error_if_argc_is_smaller_then   ->  Calls *error* if argc is smaller then given argument.
+#   error_if_argc_is_not_equal_to   ->  Calls *error* if argc isn't equal to given argument.
+#   error_if_argc_is_greater_then   ->  Calls *error* if argc is greater then given argument.
+#   error_if_invalid_message        ->  Calls *error* if given argument is invalid message.
+#   error_if_empty                  ->  Calls *error* if given argument is empty string.
+#   error_if_invalid_bash_script    ->  Calls *error* if given bash script string has syntax errors.
+#   error_if_false                  ->  Calls *error* if silently evaluated argument returns 1.
+#   error_if_true                   ->  Calls *error* if silently evaluated argument returns 0.
+
+# ENCAPSULATED DEVELOPER FUNCTIONS:
+
+# Functions same as MODULE FUNCTIONS that can work as if they were called by any ancestor function:
+#
+#   dev_print_stack
+#   dev_error
+#   dev_error_if_not_natural_number
+#   dev_error_if_argc_is_smaller_then
+#   dev_error_if_argc_is_not_equal_to
+#   dev_error_if_argc_is_greater_then
+#   dev_error_if_invalid_message
+#   dev_error_if_empty
+#   dev_error_if_invalid_bash_script
+#   dev_error_if_false
+#   dev_error_if_true
+#
+# Helper functions used just for implementation of other functions:
+#
+#   dev_error_if_argc_is    ->  Used for implementation of:
+#                               1)  dev_error_if_argc_is_smaller_then
+#                               2)  dev_error_if_argc_is_not_equal_to
+#                               3)  dev_error_if_argc_is_greater_then
+
+########################################### DEPENDENCIES ###########################################
+
+# ANSI_escape_module:
+#   ->  Globals:    /
+#   ->  Functions:  clear_escape_sequences
+
+# color_module:
+#   ->  Globals:    NO_COLOR, CYAN_FG, B_RED_FG, B_YELLOW_FG, B_BLUE_FG
+#   ->  Functions:  /
+
+# fancy_module:
+#   ->  Globals:    /
+#   ->  Functions:  highlight, error_message, print_dashes
+
+########################################### REQUIREMENTS ###########################################
+
+# If path to modules isn't provided, assume that modules are in the same directory as this script.
+BASH_MODULES_PATH="${BASH_MODULES_PATH:-"$(realpath "$(dirname "${BASH_SOURCE[0]}")")"}"
+
+# If the function "load_modules" isn't defined, source the "module_loader" script to obtain it.
+declare -F 'load_modules' &> /dev/null || { source "${BASH_MODULES_PATH}/module_loader" || exit 1; }
+
+# Load modules that are necessary for this one to work properly.
+load_modules "ANSI_escape" "color" "fancy"
+
+# Enable bash debug mode which is necessery for this module to work properly.
+shopt -s extdebug
+
+######################################### DEFAULT SETTINGS #########################################
+
+# Define default colors if they aren't defined already.
+SCRIPT_COLOR="${SCRIPT_COLOR:-"${B_BLUE_FG}"}"       # Color used for scripts in the call stack.
+FUNCTION_COLOR="${FUNCTION_COLOR:-"${B_YELLOW_FG}"}" # Color used for functions in the call stack.
+ASCII_ART_COLOR="${ASCII_ART_COLOR:-"${CYAN_FG}"}"   # Color used for decorations in the call stack.
+HIGHLIGHT_COLOR="${HIGHLIGHT_COLOR:-"${CYAN_FG}"}"   # Color used for special parts of the messages.
+
+# If argument checkings aren't specified, disable them.
+CHECK_ARGS="${CHECK_ARGS:-"0"}"         # Flag that enables argument checking in MODULE FUNCIONS.
+DEV_CHECK_ARGS="${DEV_CHECK_ARGS:-"0"}" # Flag that enables argument checking in the dev_* functions
+
+######################################### MODULE FUNCTIONS #########################################
+
+# encapsulate_this_function
+#
+#   Description         ->  Encapsulate the caller function to the script where it was defined.
+#                           If that function was called outside of the script where it was defined,
+#                           the script and function call stack will be printed together with the
+#                           appropriate error message and this function will exit with 1. If there
+#                           is a function with the same name just without the prefix "dev_" in that
+#                           same script, user will be noted that he may whish to use it instead.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if the caller function was used outisde of the script where
+#                           it was defined.
+#                           Return 0 otherwise.
+# TODO: Once the highlighting system is properly working, remove the hl_* variables and use
+#       *highlight* function in subshell instead of them.
+function encapsulate_this_function()
+{
+    # Return 0 if both callee and caller functions were defined in the current shell.
+    local callee_info="$(declare -F "${FUNCNAME[1]}")"
+    local caller_info="$(declare -F "${FUNCNAME[2]}")"
+    [ "$(wc -w <<< "${callee_info}")" -eq 1 ] && [ "$(wc -w <<< "${caller_info}")" -eq 1 ] && return
+
+    # Return 0 if both callee and caller functions were defined in the same script.
+    local callee_script="$(echo -n "${callee_info}" | cut -d ' ' -f 3- | xargs -0r realpath)"
+    local caller_script="$(echo -n "${caller_info}" | cut -d ' ' -f 3- | xargs -0r realpath)"
+    [ "${callee_script}" = "${caller_script}" ] && return 0
+
+    # Otherwise check for alternative function in the callee script and issue an error.
+    local hl_callee_script="${NO_COLOR}${HIGHLIGHT_COLOR}${callee_script}${B_RED_FG}"
+    local msg="This function shouldn't be used outside of ${hl_callee_script}!"
+    local alternative="${FUNCNAME[1]/#dev_/}"
+    local alternative_file="$(declare -F "${alternative}" | cut -d ' ' -f 3- | xargs -0r realpath)"
+    if [ "${alternative_file}" = "${callee_script}" ]; then
+        local hl_alternative="${NO_COLOR}${HIGHLIGHT_COLOR}${alternative}${B_RED_FG}"
+        local suggestion="\nTry using the ${hl_alternative} function instead."
+    fi
+
+    # Issue an error and offer the alternative function if there is any.
+    dev_error 1 "${msg}" '' "${suggestion}"
+}
+
+# print_stack
+#
+#   Description         ->  Print the script and function call stack above this function.
+#                           This function doesn't print the new line("\n") at the end of stack for
+#                           the purpose of concatanating the error message in the same line.
+#                           If this function is used alone, the new line should be printed
+#                           afterwards to make sure that the output is flushed to the stdout.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if this function was called with any arguments. [CHECK_ARGS]
+#                           Return 0 otherwise.
+#
+function print_stack()
+{
+    # Guard from invalid arguments.
+    (( CHECK_ARGS )) && dev_error_if_argc_is_not_equal_to 0 0
+
+    # Print the script and function call stack above this function.
+    dev_print_stack 1
+}
+
+# error ${1} [... ${N}]
+#
+#   Description         ->  Print the script and function call stack above this function together
+#                           with the error message ${1} [... ${N}] and exit with 1.
+#
+#   ${1}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${1} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${1} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${1} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Always exit with 1.
+#
+function error()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 1
+        dev_error_if_invalid_message 0 "${*}"
+    fi
+
+    # Print the call stack above this function, then the error message ${@} and exit with 1.
+    dev_error 1 "${@}"
+}
+
+# error_if_not_natural_number ${1}
+#
+#   Description         ->  If ${1} isn't a natural(N0) number, print the script and function call
+#                           stack above this function together with the appropriate error message
+#                           and exit with 1.
+#
+#   ${1}                ->  Argument to be checked as natural(N0) number.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1) The arguments are invalid. [CHECK_ARGS]
+#                               2) The ${1} is not a natural(N0) number.
+#                           Return 0 otherwise.
+#
+function error_if_not_natural_number()
+{
+    # Guard from invalid arguments.
+    (( CHECK_ARGS )) && dev_error_if_argc_is_not_equal_to 0 1
+
+    # Issue an error if the requested argument isn't a natural(N0) number.
+    dev_error_if_not_natural_number 1 "${1}"
+}
+
+# error_if_argc_is_smaller_then ${1}
+#
+#   Description         ->  If the caller function was called with less then ${1} arguments, print
+#                           the script and function call stack above this function together with the
+#                           appropriate error message and exit with 1.
+#
+#   ${1}                ->  Minimal number of arguments that the caller function must have.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The caller function has less then ${1} arguments.
+#                           Return 0 otherwise.
+#
+function error_if_argc_is_smaller_then()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_not_equal_to 0 1
+        dev_error_if_not_natural_number 0 "${1}"
+    fi
+
+    # Issue an error if the caller function was called with less then ${1} arguments.
+    dev_error_if_argc_is_smaller_then 1 "${1}"
+}
+
+# error_if_argc_is_not_equal_to ${1}
+#
+#   Description         ->  If the caller function doesn't have exactly ${1} arguments, print the
+#                           script and function call stack above this function together with the
+#                           appropriate error message and exit with 1.
+#
+#   ${1}                ->  Exact number of arguments that the caller function must have.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The caller function doesn't have exactly ${1} arguments.
+#                           Return 0 otherwise.
+#
+function error_if_argc_is_not_equal_to()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_not_equal_to 0 1
+        dev_error_if_not_natural_number 0 "${1}"
+    fi
+
+    # Issue an error if the caller function doesn't have exactly ${1} arguments.
+    dev_error_if_argc_is_not_equal_to 1 "${1}"
+}
+
+# error_if_argc_is_greater_then ${1}
+#
+#   Description         ->  If the caller function was called with more then ${1} arguments, print
+#                           the script and function call stack above this function, together with
+#                           the appropriate error message and exit with 1.
+#
+#   ${1}                ->  Maximal number of arguments that the caller function can have.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The requested function function has more then ${1} arguments.
+#                           Return 0 otherwise.
+#
+function error_if_argc_is_greater_then()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_not_equal_to 0 1
+        dev_error_if_not_natural_number 0 "${1}"
+    fi
+
+    # Issue an error if the the caller function was called with more then ${1} arguments.
+    dev_error_if_argc_is_greater_then 1 "${1}"
+}
+
+# error_if_invalid_message [${1}]
+#
+#   Description         ->  If [${1}] contains only escape sequences and blank characters, print the
+#                           script and function call stack above this function together with the
+#                           appropriate error message and exit with 1.
+#
+#   [${1}]              ->  Text to be checked as a valid message.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The [${1}] string is not a valid message.
+#                           Return 0 otherwise.
+#
+function error_if_invalid_message()
+{
+    # Guard from invalid arguments.
+    (( CHECK_ARGS )) && dev_error_if_argc_is_greater_then 0 1
+
+    # Issue an error if ${1} contains nothing but the escape sequences and blank characters.
+    dev_error_if_invalid_message 1 "${1}"
+}
+
+# error_if_empty ${1} ${2} [... ${N}]
+#
+#   Description         ->  If ${1} is the empty string, print the script and function call stack
+#                           above this function together with the ${2} [... ${N}] error message and
+#                           exit with 1.
+#
+#   ${1}                ->  String to be checked if it is empty.
+#
+#   ${2}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${2} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${2} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${2} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  ${1} is the empty string.
+#                           Return 0 otherwise.
+#
+function error_if_empty()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 2
+        dev_error_if_invalid_message 0 "${*:2}"
+    fi
+
+    # Issue an error if ${1} is empty.
+    dev_error_if_empty 1 "${@}"
+}
+
+# error_if_invalid_bash_script ${1}
+#
+#   Description         ->  If bash script ${1} has syntax errors, print the script and function
+#                           call stack above this function together with the appropriate error
+#                           message and exit with 1.
+#
+#   ${1}                ->  String to be checked if it is a valid bash script.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The string ${1} is not a valid bash script.
+#                           Return 0 otherwise.
+#
+function error_if_invalid_bash_script()
+{
+    # Guard from invalid arguments.
+    (( CHECK_ARGS )) && dev_error_if_argc_is_not_equal_to 0 1
+
+    # Issue an error if ${1} is not a valid bash script.
+    dev_error_if_invalid_bash_script 1 "${1}"
+}
+
+# error_if_false ${1} ${2} [... ${N}]
+#
+#   Description         ->  If silently evaluated ${1} doesn't return 0, print the script and
+#                           function call stack above this function together with ${2} [... ${N}]
+#                           error message and exit with 1.
+#
+#   ${1}                ->  String to be silently evaluated as bash script.
+#
+#   ${2}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${2} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${2} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${2} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The silent evaluation of ${1} didn't return 0.
+#                           Return 0 otherwise.
+#
+function error_if_false()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 2
+        dev_error_if_invalid_bash_script 0 "${1}"
+        dev_error_if_invalid_message 0 "${*:2}"
+    fi
+
+    # Issue an error if the silent evaluation of the bash script string ${1} doesn't return 0.
+    dev_error_if_false 1 "${@}"
+}
+
+# error_if_true ${1} ${2} [... ${N}]
+#
+#   Description         ->  If silently evaluated ${1} returns 0, print the script and function
+#                           call stack above this function together with the ${2} [... ${N}] error
+#                           message and exit with 1.
+#
+#   ${1}                ->  String to be silently evaluated as bash script.
+#
+#   ${2}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${2} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${2} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${2} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in the dev_* functions.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  The arguments are invalid. [CHECK_ARGS]
+#                               2)  The silent evaluation of ${1} returned 0.
+#                           Return 0 otherwise.
+#
+function error_if_true()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 2
+        dev_error_if_invalid_bash_script 0 "${1}"
+        dev_error_if_invalid_message 0 "${*:2}"
+    fi
+
+    # Issue an error if the silent evaluation of the bash script string ${1} doesn't return 0.
+    dev_error_if_true 1 "${@}"
+}
+
+################################# ENCAPSULATED DEVELOPER FUNCTIONS #################################
+
+# dev_print_stack ${1}
+#
+#   Description         ->  Print the script and function call stack from the top to the bottom,
+#                           without the last ${1} number of functions.
+#                           This function doesn't print the new line("\n") at the end of stack for
+#                           the purpose of concatanating the error message in the same line.
+#                           If used solely the new line should be printed afterwards to make sure
+#                           that the output is flushed to the stdout.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                           Return 0 otherwise.
+#
+function dev_print_stack()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_not_equal_to 0 1
+        dev_error_if_not_natural_number 0 "${1}"
+    fi
+
+    # Set the colors
+    local scriptc="${NO_COLOR}${SCRIPT_COLOR}"
+    local functionc="${NO_COLOR}${FUNCTION_COLOR}"
+    local decorationc="${NO_COLOR}${ASCII_ART_COLOR}"
+
+    # Declare the height at which the stack stops(+1 to ignore this function).
+    local stack_height=$(( ${1} + 1 ))
+
+    # Add the function called at the chosen height to the stack.
+    local stack="${B_RED_FG}${FUNCNAME[${stack_height}]}${NO_COLOR}"
+
+    # Go from the chosen height to the top and prepend all parrent functions.
+    local function_name line_number
+    while [ -n "${FUNCNAME[$(( ++stack_height ))]}" ]; do
+        function_name="${functionc}${FUNCNAME[${stack_height}]}"
+        line_number="${NO_COLOR}${BASH_LINENO[$(( stack_height - 1 ))]}"
+        stack="${function_name}${decorationc}[${line_number}${decorationc}] -> ${stack}"
+    done
+
+    # Now prepend all the executing scripts starting from the current one.
+    local pid="${$}"
+    local stats script_name
+    while true; do
+        # Get PPID and COMMAND of the script that has ${pid}.
+        stats="$(ps -e --format 'pid ppid command' | grep "^ *${pid}" | xargs)"
+
+        # Get name of the script as the 4th arg in the format "PID PPID /bin/bash ./[script_name]".
+        script_name="$(echo -n "${stats}" | cut -d ' ' -f 4  | xargs -r basename)"
+
+        # If there is no script name, break since the interactive shell in terminal is reached.
+        [ -z "${script_name}" ] && break
+
+        # If there is the script name, prepend it to the stack.
+        stack="${scriptc}${script_name} ${decorationc}-> ${stack}"
+
+        # Change current PID to current PPID to continue getting info on next parrent script.
+        pid="$(echo -n "${stats}" | cut -d ' ' -f 2)"
+    done
+
+    # Print the script and function calls gathered in the stack.
+    echo -ne "\n${stack}${NO_COLOR}"
+}
+
+# dev_error ${1} ${2} [... ${N}]
+#
+#   Description         ->  Print the script and function call stack from the top to the bottom,
+#                           without the last ${1} number of functions together with the error
+#                           message ${2} [... ${N}] and exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${2} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${2} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${2} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Always exit with 1.
+#
+function dev_error()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 2
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_invalid_message 0 "${*:2}"
+    fi
+
+    # Increment the chosen stack height by 1 to skip this function when printing the stack.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Print the stack together with the error message to stderr and then exit with 1.
+    {
+        dev_print_stack "${stack_height}"
+        highlight "${ASCII_ART_COLOR}" ': '
+        error_message "${@:2}"
+    } 1>&2
+
+    exit 1
+}
+
+# dev_error_if_not_natural_number ${1} ${2}
+#
+#   Description         ->  If ${2} isn't a natural(N0) number, print the script and function call
+#                           stack from the top to the bottom, without the last ${1} functions
+#                           together with the appropriate error message and exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  Argument to be checked as natural(N0) number.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1) This function was called outside of this script.
+#                               2) The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3) The ${2} is not a natural(N0) number.
+#                           Return 0 otherwise.
+# TODO: Once the highlighting system is properly working, remove the hl_* variables and use
+#       *highlight* function in subshell instead of them.
+function dev_error_if_not_natural_number()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        (( "${#}" != 2 )) && dev_error 0 'Must be called with exactly ' '2' ' arguments!'
+        if [[ ! "${1}" =~ ^[0-9]+$ ]]; then
+            local hl_argument="${NO_COLOR}${HIGHLIGHT_COLOR}${1:-"[Empty]"}${B_RED_FG}"
+            local msg="The argument(${hl_argument}) is not a natural number!"
+            dev_error 0 "${msg}"
+        fi
+    fi
+
+    # Take the first argument as the stack height.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if the requested argument isn't a natural(N0) number.
+    local hl_argument="${NO_COLOR}${HIGHLIGHT_COLOR}${2:-"[Empty]"}${B_RED_FG}"
+    local msg="The argument(${hl_argument}) is not a natural number!"
+    [[ "${2}" =~ ^[0-9]+$ ]] || dev_error "${stack_height}" "${msg}"
+}
+
+# dev_error_if_argc_is ${1} ${2} ${3}
+#
+#   Description         ->  If the function at requested stack height ${1} has the argument counter
+#                           smaller|not_equal|greater (indicated by the argument ${2}) than ${3},
+#                           print the stack from the top to the requested function together with the
+#                           appropriate error message and exit with 1.
+#
+#   ${1}                ->  Non-negative number that specifies the function for the checking:
+#                           0   ->  Check the argument counter for the parent of this function.
+#                           1   ->  Check the argument counter for the grandparent of this function.
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  Specifies how to compare argc of the chosen function and ${3}:
+#                           -1  -> Issue an error if the argc is smaller then the ${3}.
+#                           0   -> Issue an error if the argc is greater then the ${3}.
+#                           1   -> Issue an error if the argc is not equal to the ${3}.
+#
+#   ${3}                ->  Number used for comparation with the argc of the chosen function.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The requested function doesn't meet the specified criteria.
+#                           Return 0 otherwise.
+#
+function dev_error_if_argc_is()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        (( "${#}" != 3 )) && dev_error 0 'Must be called with exactly ' '3' ' arguments!'
+        dev_error_if_not_natural_number 0 "${1}"
+        local arg2="${2:-"[Empty]"}"
+        [[ ${2} =~ ^-?1|0$ ]] || dev_error 0 '${2}(' "${arg2}" ') must be ' '-1' ', ' '0' ' or ' '1'
+        dev_error_if_not_natural_number 0 "${3}"
+    fi
+
+    # Increment the chosen stack height by 1 to check the argument counter of the correct function.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Correct use of singular/plural.
+    case "${3}" in
+        1) local arg=' argument!' ;;
+        *) local arg=' arguments!';;
+    esac
+
+    # Issue an error if the argc of the chosen function doesn't match the requested criteria.
+    local argc="${BASH_ARGC[${stack_height}]}"
+    case "${2}" in
+        -1) (( argc < ${3} )) && dev_error "${stack_height}" 'Must have at least ' "${3}" "${arg}";;
+        0) (( argc != ${3} )) && dev_error "${stack_height}" 'Must have exactly '  "${3}" "${arg}";;
+        1) (( argc > ${3}  )) && dev_error "${stack_height}" 'Must have at most '  "${3}" "${arg}";;
+    esac
+
+    return 0
+}
+
+# dev_error_if_argc_is_smaller_then ${1} ${2}
+#
+#   Description         ->  If the function at requested stack height ${1} has less then ${2} number
+#                           of arguments, print the stack from the top to the requested function
+#                           together with the appropriate error message and exit with 1.
+#
+#   ${1}                ->  Non-negative number that specifies the function for the checking:
+#                           0   ->  Check the argument counter for the parent of this function.
+#                           1   ->  Check the argument counter for the grandparent of this function.
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  Minimal number of arguments that the requested function must have.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The requested function has less then ${2} arguments.
+#                           Return 0 otherwise.
+#
+function dev_error_if_argc_is_smaller_then()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_not_equal_to 0 2
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_not_natural_number 0 "${2}"
+    fi
+
+    # Increment the chosen stack height by 1 to check the argument counter of the correct function.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if the argc of the chosen function is smaller then the ${2}.
+    dev_error_if_argc_is "${stack_height}" -1 "${2}"
+}
+
+# dev_error_if_argc_is_not_equal_to ${1} ${2}
+#
+#   Description         ->  If the function at requested stack height ${1} doesn't have exactly ${2}
+#                           number of arguments, print the stack from the top to the requested
+#                           function together with the appropriate error message and exit with 1.
+#
+#   ${1}                ->  Non-negative number that specifies the function for the checking:
+#                           0   ->  Check the argument counter for the parent of this function.
+#                           1   ->  Check the argument counter for the grandparent of this function.
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  Exact number of arguments that the requested function must have.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The requested function doesn't have exactly ${2} arguments.
+#                           Return 0 otherwise.
+#
+function dev_error_if_argc_is_not_equal_to()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is 0 0 2
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_not_natural_number 0 "${2}"
+    fi
+
+    # Increment the chosen stack height by 1 to check the argument counter of the correct function.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if the argc of the chosen function is not equal to ${2}.
+    dev_error_if_argc_is "${stack_height}" 0 "${2}"
+}
+
+# dev_error_if_argc_is_greater_then ${1} ${2}
+#
+#   Description         ->  If the function at requested stack height ${1} has more then ${2} number
+#                           of arguments, print the stack from the top to the requested function
+#                           together with the appropriate error message and exit with 1.
+#
+#   ${1}                ->  Non-negative number that specifies the function for the checking:
+#                           0   ->  Check the argument counter for the parent of this function.
+#                           1   ->  Check the argument counter for the grandparent of this function.
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  Maximal number of arguments that the requested function can have.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The requested function function has more then ${2} arguments.
+#                           Return 0 otherwise.
+#
+function dev_error_if_argc_is_greater_then()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_not_equal_to 0 2
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_not_natural_number 0 "${2}"
+    fi
+
+    # Increment the chosen stack height by 1 to check the argument counter of the correct function.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if the argc of the chosen function is greater then the ${2}.
+    dev_error_if_argc_is "${stack_height}" 1 "${2}"
+}
+
+# dev_error_if_invalid_message ${1} [${2}]
+#
+#   Description         ->  If [${2}] contains only escape sequences and blank characters, print the
+#                           script and function call stack from the top to the bottom, without the
+#                           last ${1} functions together with the appropriate error message and
+#                           exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   [${2}]              ->  Text to be checked as a valid message.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The [${2}] string is not a valid message.
+#                           Return 0 otherwise.
+#
+function dev_error_if_invalid_message()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 1
+        dev_error_if_not_natural_number 0 "${1}"
+    fi
+
+    # Increment the chosen stack height by 1 to skip this function when printing the stack.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if ${2} contains nothing but the escape sequences and blank characters.
+    local valid_part_of_message="$(clear_escape_sequences "${2}" | sed 's/[[:space:]]//g')"
+    [ -n "${valid_part_of_message}" ] || dev_error "${stack_height}" 'Invalid message for printing!'
+}
+
+# dev_error_if_empty ${1} ${2} ${3} [... ${N}]
+#
+#   Description         ->  If ${2} is empty string, print the script and function call stack from
+#                           the top to the bottom, without the last ${1} number of functions
+#                           together with the error message ${3} [... ${N}] and exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  String to be checked if it is empty.
+#
+#   ${3}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${3} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${3} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${3} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  ${2} is the empty string.
+#                           Return 0 otherwise.
+#
+function dev_error_if_empty()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 3
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_invalid_message 0 "${*:3}"
+    fi
+
+    # Increment the chosen stack height by 1 to skip this function when printing the stack.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if ${2} is empty.
+    [ -n "${2}" ] || dev_error "${stack_height}" "${@:3}"
+}
+
+# dev_error_if_invalid_bash_script ${1} ${2}
+#
+#   Description         ->  If bash script ${2} has syntax errors, print the script and function
+#                           call stack from the top to the bottom, without the last ${1} functions
+#                           together with the appropriate error message and exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  String to be checked if it is a valid bash script.
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  Color used for highlighting the special parts of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The string ${2} is not a valid bash script.
+#                           Return 0 otherwise.
+# TODO: Once the highlighting system is properly working, remove the hl_* variables and use
+#       *highlight* function in subshell instead of them.
+function dev_error_if_invalid_bash_script()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 2
+        dev_error_if_not_natural_number 0 "${1}"
+    fi
+
+    # Increment the chosen stack height by 1 to skip this function when printing the stack.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if ${2} is empty.
+    dev_error_if_empty "${stack_height}" "${2}" 'Missing the shell script string for evaluation!'
+
+    # Issue an error if bash script string ${2} has syntax errors.
+    local errors="$(echo -ne "${2}" | bash -n 2>&1 )"
+    if [ -n "${errors}" ]; then
+        local hl_script="${NO_COLOR}${HIGHLIGHT_COLOR}${2}${B_RED_FG}"
+        local msg="The string ${hl_script} is not a valid bash script!\n\n"
+        local dashes="\n$(print_dashes)\n"
+        dev_error "${stack_height}" "${msg}" '' "ERROR${dashes}" "${NO_COLOR}${errors}" "${dashes}"
+    fi
+
+    return 0
+}
+
+# dev_error_if_false ${1} ${2} ${3} [... ${N}]
+#
+#   Description         ->  If silently evaluated ${2} doesn't return 0, print the script and
+#                           function call stack from the top to the bottom, without the last ${1}
+#                           functions together with error message ${3} [... ${N}] and exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  String to be silently evaluated as bash script.
+#
+#   ${3}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${3} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${3} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${3} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The silent evaluation of ${2} didn't return 0.
+#                           Return 0 otherwise.
+#
+function dev_error_if_false()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 3
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_invalid_bash_script 0 "${2}"
+        dev_error_if_invalid_message 0 "${*:3}"
+    fi
+
+    # Increment the chosen stack height by 1 to skip this function when printing the stack.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if the silent evaluation of the bash script string ${2} doesn't return 0.
+    eval "${2}" &> /dev/null || dev_error "${stack_height}" "${@:3}"
+}
+
+# dev_error_if_true ${1} ${2} ${3} [... ${N}]
+#
+#   Description         ->  If silently evaluated ${2} returns 0, print the script and function call
+#                           stack from the top to the bottom, without the last ${1} functions
+#                           together with the error message ${3} [... ${N}] and exit with 1.
+#
+#   ${1}                ->  Non-negative number that tells the function when to stop stack printing:
+#                           0   ->  Print the stack from the top to the parent of this function.
+#                           1   ->  Print the stack from the top to the grandparent of this function
+#                           .
+#                           .
+#                           .
+#
+#   ${2}                ->  String to be silently evaluated as bash script.
+#
+#   ${3}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${3} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${3} [... ${N}]     ->  Error message where every argument with the odd index is printed in red
+#                           and every argument with the even index is printed in specified color.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  SCRIPT_COLOR    ->  Color used for scripts in the printed call stack.
+#
+#   <=  FUNCTION_COLOR  ->  Color used for functions in the printed call stack.
+#
+#   <=  ASCII_ART_COLOR ->  Color used for ASCII decorations in the printed call stack.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${3} isn't a color sequence, this color is used for highlighting of
+#                           every second argument of the error message.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking.
+#
+#   return              ->  Exit with 1 if:
+#                               1)  This function was called outside of this script.
+#                               2)  The arguments are invalid. [DEV_CHECK_ARGS]
+#                               3)  The silent evaluation of ${2} returned 0.
+#                           Return 0 otherwise.
+#
+function dev_error_if_true()
+{
+    # Prevent this function from being used outside of this script.
+    encapsulate_this_function
+
+    # Guard from invalid arguments.
+    if (( DEV_CHECK_ARGS )); then
+        dev_error_if_argc_is_smaller_then 0 3
+        dev_error_if_not_natural_number 0 "${1}"
+        dev_error_if_invalid_bash_script 0 "${2}"
+        dev_error_if_invalid_message 0 "${*:3}"
+    fi
+
+    # Increment the chosen stack height by 1 to skip this function when printing the stack.
+    local stack_height="$(( ${1} + 1 ))"
+
+    # Issue an error if the silent evaluation of the bash script string ${2} returns 0.
+    eval "${2}" &> /dev/null && dev_error "${stack_height}" "${@:3}" || return 0
+}

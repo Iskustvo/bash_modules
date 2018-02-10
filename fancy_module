@@ -1,0 +1,350 @@
+#!/bin/bash
+
+############################################# LICENCE ##############################################
+
+#   Copyright (C) 2018, Ivan Balevic
+
+#   This file is part of the "Bash Modules" project, a collection
+#   of Bash scripts that provides additional functionality.
+#
+#   "Bash Modules" is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   "Bash Modules" is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with "Bash Modules". If not, see <http://www.gnu.org/licenses/>.
+
+########################################### DESCRIPTION ############################################
+
+#   This module is desined to provide fancy printouts in a compact way.
+
+####################################### AVAILABLE FUNCTIONS ########################################
+
+# MODULE FUNCTIONS:
+
+#   highlight               ->  Prints the text in the chosen color and resets color to previous one
+#   TODO: fix_highlights    ->  Corrects the input which used *highlight* function in subshell.
+#   highlight_every_second  ->  Prints all arguments, where every second is printed with *highlight*
+#   error_message           ->  Sets default color to red and calls *highlight_every_second*
+#   print_dashes            ->  Prints the full screen line of dashes.
+#   print_header            ->  Prints the text in specified color between the 2 lines of dashes.
+#   print_subheader         ->  Prints the text in specified color between the 2 new lines.
+#   run                     ->  Prints message, executes command and writes the result and stderr.
+
+########################################### DEPENDENCIES ###########################################
+
+# ANSI_escape_module:
+#   ->  Globals:    /
+#   ->  Functions:  clear_escape_sequences, is_color
+
+# color_module:
+#   ->  Globals:    NO_COLOR, CYAN_FG, B_RED_FG, B_GREEN_FG, B_YELLOW_FG, B_BLUE_FG
+#   ->  Functions:  /
+
+# [debug_module]:
+#   ->  Globals:    /
+#   ->  Functions:  error_if_argc_is_smaller_then, error_if_invalid_message,
+#                   error_if_invalid_bash_script
+
+########################################### REQUIREMENTS ###########################################
+
+# If path to modules isn't provided, assume that modules are in the same directory as this script.
+BASH_MODULES_PATH="${BASH_MODULES_PATH:-"$(realpath "$(dirname "${BASH_SOURCE[0]}")")"}"
+
+# If the function "load_modules" isn't defined, source the "module_loader" script to obtain it.
+declare -F 'load_modules' &> /dev/null || { source "${BASH_MODULES_PATH}/module_loader" || exit 1; }
+
+# Load modules that are necessary for this one to work properly.
+load_modules "ANSI_escape" "color"
+
+######################################### DEFAULT SETTINGS #########################################
+
+# Define default colors if they aren't defined already.
+HEADER_COLOR="${HEADER_COLOR:-"${B_BLUE_FG}"}"         # Color used for headers.
+SUBHEADER_COLOR="${SUBHEADER_COLOR:-"${B_YELLOW_FG}"}" # Color used for subheaders.
+HIGHLIGHT_COLOR="${HIGHLIGHT_COLOR:-"${CYAN_FG}"}"     # Color used for highlighting.
+
+# If argument checkings aren't specified, disable them.
+CHECK_ARGS="${CHECK_ARGS:-"0"}"         # Flag that enables argument checking in MODULE FUNCIONS.
+DEV_CHECK_ARGS="${DEV_CHECK_ARGS:-"0"}" # Flag used for debugging of functions from "debug_module".
+
+# If argument checking is requested, load the "debug_module".
+(( CHECK_ARGS )) && load_modules "debug"
+
+######################################### MODULE FUNCTIONS #########################################
+
+# highlight [${1} ${2}]
+#
+#   Description         ->  Print the text [${1}] or [${2}] in the chosen color.
+#                           Printouts after this function will be in the same style/color as before.
+#                           ( It doesn't work too well with "\t" and when line-wrapping occurs. )
+#                           TODO: Function fix_highlights should address both problems.
+#
+#   [${1}]              ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                           2) Text to be highlighted.
+#
+#   [${2}]              ->  If [${1}] is a color, [${2}] will be the text for highlighting.
+#
+#   <=  HIGHLIGHT_COLOR ->  If [${1}] isn't a color, this color will be used for highlighting.
+#
+#   return              ->  Always return 0.
+#
+function highlight()
+{
+    # If ${1} is just a color, save it and shift the arguments.
+    is_color "${1}" && local color="${1}" && shift
+
+    # Get the number of columns avalible in the terminal.
+    local columns="$(tput cols)"
+
+    # Calculate how much lines will be outputed.
+    local new_lines="$(echo -ne "${1}" | wc -l)"
+    (( columns )) && local multilines="$(echo -ne "${1}" | grep -c ".\{$(( columns + 1 ))\}")"
+    local lines="$(( new_lines + multilines ))"
+
+    # Calculate the number of characters in the last line of the output.
+    local characters="$(clear_escape_sequences "${1}" | sed -z 's/.*\n//' | wc -m)"
+    (( columns )) && characters="$(( characters % columns ))"
+
+    # Save current cursor position, style and color, then print the output in specified color
+    # and ater that load the saved cursor position, style and color.
+    echo -ne "[s${NO_COLOR}${color:-"${HIGHLIGHT_COLOR}"}${1}[u"
+
+    # At this point, style and color are just like before, only cursor position should be adjusted.
+    (( lines )) && echo -ne "[1G[${lines}B"
+    (( characters )) && echo -ne "[${characters}C"
+
+    return 0
+}
+
+
+# TODO: Implement "fix_highlights" function that will correct the output when "highlight" function
+#       was used in subshell.
+#       Implementation:
+#       1) Get the current cursor position in the terminal.
+#       2) Prepend spaces to the text to simulate current cursor position.
+#       3) Use "expand" to get correct number of spaces instead of \t escape sequences.
+#       4) Parse the input and correct the cursor movements placed by the "highlight" function.
+#          ( This step will probably need "awk" or something more powerfull.)
+
+
+# highlight_every_second [${1} ... ${N}]
+#
+#   Description         ->  Concatenate and print all arguments, where every second is highlighted.
+#
+#   [${1}]              ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case [${1}] is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument 1.
+#
+#   [${1} ... ${N}]     ->  Text where every argument with the odd index is printed in current
+#                           style/color and every argument with the even index is highlighted.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  HIGHLIGHT_COLOR ->  If [${1}] isn't a color, this color will be used for highlighting.
+#
+#   return              ->  Always return 0.
+#
+function highlight_every_second()
+{
+    # If ${1} is just a color, save it and shift the arguments.
+    is_color "${1}" && local color="${1}" && shift
+
+    # Print the remaining arguments where every second is highlighted in specified or default color.
+    local number_of_args="${#}"
+    for ((i = 1; i <= number_of_args; i++)); do
+        if (( i % 2 == 0 )); then
+            highlight "${color:-${HIGHLIGHT_COLOR}}" "${1}"
+        else
+            echo -ne "${1}"
+        fi
+        shift
+    done
+}
+
+# error_message [${1} ... ${N}]
+#
+#   Description         ->  Concatenate and print all arguments.
+#                           Every argument with the odd index is printed in red.
+#                           Every argument with the even index is highlighted in specified color.
+#
+#   [${1}]              ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case [${1}] is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument 1.
+#
+#   [${1} ... ${N}]     ->  Text where every argument with the odd index is printed in red
+#                           and every argument with the even index is highlighted.
+#                           (The first argument of the message is counted as 1)
+#
+#   <=  HIGHLIGHT_COLOR ->  If [${1}] isn't a color, this color will be used for highlighting.
+#
+#   return              ->  Always return 0.
+#
+function error_message()
+{
+    # If message is empty after removing all the escape sequences and spaces, just return 0.
+    [ -z "$(clear_escape_sequences "${*}" | sed 's/[[:space:]]//g')" ] && return 0
+
+    # Set the error message to be printed in red(if the arguments don't specify otherwise).
+    if [ -z "${1}" ]; then
+        set -- "${@:1:2}" "${B_RED_FG}${3}" "${@:4}"
+    elif is_color "${1}"; then
+        set -- "${1}" "${B_RED_FG}${2}" "${@:3}"
+    else
+        set -- "${B_RED_FG}${1}" "${@:2}"
+    fi
+
+    # Highlight every second argument in specified color, reset the style/color and add a new line.
+    highlight_every_second "${@}" && echo "${NO_COLOR}"
+}
+
+# print_dashes
+#
+#   Description ->  Print the full screen line of dash characters.
+#
+#   return      ->  Always return 0.
+#
+function print_dashes()
+{
+    printf "%$(tput cols)s\n" | tr ' ' '-'
+}
+
+# print_header [${1} ${2}]
+#
+#   Description         ->  Print the header in specified color between the 2 lines of dashes.
+#
+#   [${1}]              ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for the header.
+#                           2) Header that will be printed between 2 lines of dashes.
+#
+#   [${2}]              ->  If [${1}] is a color, [${2}] will be the header.
+#
+#   <=  HEADER_COLOR    ->  If [${1}] isn't a color, the header will be printed in this color.
+#
+#   return              ->  Always return 0.
+#
+function print_header()
+{
+    # If the first argument is just a color, save it and shift the arguments.
+    is_color "${1}" && local color="${1}" && shift
+
+    # If header is empty after removing all the escape sequences and spaces, just return 0.
+    [ -z "$(clear_escape_sequences "${1}" | sed 's/[[:space:]]//g')" ] && return 0
+
+    # Print the header in specified or default header color, between 2 lines of dashes.
+    echo -ne "$(print_dashes)\t${color:-${HEADER_COLOR}}${1}${NO_COLOR}\n$(print_dashes)"
+}
+
+# print_subheader [${1} ${2}]
+#
+#   Description         ->  Print the subheader in specified color.
+#
+#   [${1}]              ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for the subheader.
+#                           2) Subheader text.
+#
+#   [${2}]              ->  If [${1}] is a color, [${2}] will be the subheader text.
+#
+#   <=  SUBHEADER_COLOR ->  If [${1}] isn't a color, subheader will be printed in this color.
+#
+#   return              ->  Always return 0.
+#
+function print_subheader()
+{
+    # If the first argument is just a color, save it and shift the arguments.
+    is_color "${1}" && local color="${1}" && shift
+
+    # If subheader is empty after removing all the escape sequences and spaces, just return 0.
+    [ -z "$(clear_escape_sequences "${1}" | sed 's/[[:space:]]//g')" ] && return 0
+
+    # Print the subheader in specified or default subheader color.
+    echo -e "\n${color:-${SUBHEADER_COLOR}}${1}${NO_COLOR}"
+}
+
+# run ${1} [${2}...${N-1}] ${N}
+#
+#   Description         ->  Print the messages ${1} [... ${N-1}], where every second part of it is
+#                           highlighted. Then start the silent execution of the command ${N}.
+#                           While ${N} is being run, the simple "dot" animation will be playing.
+#                           After the ${N} command has finished, "Done" or "Failed" will be printed.
+#                           In case of "Failed", exit code and stderr will also be provided.
+#
+#   ${1}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${1} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${1} [... ${N}]     ->  Text where every argument with the odd index is printed in current
+#                           style/color and every argument with the even index is highlighted.
+#                           (The first argument of the message is counted as 1)
+#
+#   ${N}                ->  String that will be evaluated and executed as a bash script.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${1} isn't a color, this color will be used for highlighting.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in dev_* functions in "debug_module"
+#
+#   return              ->  Exit with 1 if the arguments are invalid. [CHECK_ARGS]
+#                           Otherwise propagate the return code of the executed command ${N}.
+#
+function run()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        error_if_argc_is_smaller_then 2
+        error_if_invalid_message "${*: 1: $(( ${#} - 1 ))}"
+        error_if_invalid_bash_script "${@: -1}"
+    fi
+
+    # Print the colorized message.
+    highlight_every_second "${@:1:$(( ${#} - 1 ))}"
+    echo -n ":${NO_COLOR}    "
+
+    # Hide the cursor and start the "dot" animation in the background.
+    (
+        tput civis
+
+        local dots='...'
+        local number_of_dots=0
+        while true; do
+            (( number_of_dots = (number_of_dots % 3) + 1 ))
+            printf "[3D${dots:0:${number_of_dots}}%$(( 3 - number_of_dots ))s"
+            sleep 0.25
+        done
+    ) &
+
+    # Execute the given string ${N} as a bash script and get its stderr and return value.
+    local stderr retcode
+    stderr="$(eval "${@: -1}" 2>&1 1>/dev/null)"
+    retcode="${?}"
+
+    # Silently kill the dot animation in the background.
+    { kill "${!}" && wait "${!}"; } &> /dev/null
+
+    # Write the status of ${N} script, based on stderr and returned value.
+    if (( retcode == 0 )); then
+        highlight "${B_GREEN_FG}" '[3DDone\n'
+    else
+        error_message '[3DFailed' ' [' "${NO_COLOR} Exit status: ${B_RED_FG}${retcode}" ' ]'
+        if [ -n "${stderr}" ]; then
+            local dashes="$(print_dashes)"
+            error_message "${NO_COLOR}" "\nERROR\n${dashes}\n" "${stderr}" "\n${dashes}"
+        fi
+    fi
+
+    # Show currsor
+    tput cnorm
+
+    # Propagate the return code.
+    return "${retcode}"
+}

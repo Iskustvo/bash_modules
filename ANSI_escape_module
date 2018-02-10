@@ -1,0 +1,169 @@
+#!/bin/bash
+
+############################################# LICENCE ##############################################
+
+#   Copyright (C) 2018, Ivan Balevic
+
+#   This file is part of the "Bash Modules" project, a collection
+#   of Bash scripts that provides additional functionality.
+#
+#   "Bash Modules" is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   "Bash Modules" is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with "Bash Modules". If not, see <http://www.gnu.org/licenses/>.
+
+########################################### DESCRIPTION ############################################
+
+#   This module is desined to help at work with the ANSI escape sequences.
+
+######################################## AVAILABLE GLOBALS #########################################
+
+# Regular expressions for the ANSI escape sequences.
+#   ESCAPE_SEQUENCE_REGEX           ->  Regex that catches most ANSI escape sequences.
+#   ESCAPE_SEQUENCE_REGEX_EXTENDED  ->  Regex-extended that catches most ANSI escape sequences.
+
+# Regular expressions for the color escape sequences.
+#   COLOR_REGEX             ->  Regex that catches only the color escape sequences.
+#   COLOR_REGEX_EXTENDED    ->  Regex-extended that catches only the color escape sequences.
+
+####################################### AVAILABLE FUNCTIONS ########################################
+
+# Functions for general work with ANSI escape sequences:
+#
+#   is_escape_sequence      ->  Checks if the given argument is made just from the escape sequences.
+#   clear_escape_sequences  ->  Prints the given argument without the escape sequences in it.
+
+# Specific functions that work only with ANSI color escape sequences:
+#
+#   is_color        ->  Checks if the given argument is made just from the color escape sequences.
+#   clear_colors    ->  Prints the given argument without the color escape sequences in it.
+#   optimize_colors ->  Optimizes the color escape sequences in the given argument.
+
+############################################# GLOBALS ##############################################
+
+# TODO: Improve to catch all ANSI escape sequences.
+# Regular expressions for (most) ANSI escape sequences.
+ESCAPE_SEQUENCE_REGEX='[^A-Za-z]*[A-Za-z]'
+ESCAPE_SEQUENCE_REGEX_EXTENDED="${ESCAPE_SEQUENCE_REGEX}"
+
+# Regular expressions for color escape sequences.
+COLOR_REGEX="\[\(\([01]\|[34][0-7]\);\)*\([01]\|[34][0-7]\)m"
+COLOR_REGEX_EXTENDED="\[(([01]|[34][0-7]);)*([01]|[34][0-7])m"
+
+######################################### MODULE FUNCTIONS #########################################
+
+# is_escape_sequence [${1}]
+#
+#   Description ->  Check if [${1}] is made just from the escape sequences.
+#
+#   [${1}]      ->  String to be checked as a escape sequences.
+#
+#   return      ->  Return 0 if there are only escape sequences in [${1}].
+#                   Return 1 otherwise.
+#
+function is_escape_sequence()
+{
+    [[ "${1}" =~ ^(${ESCAPE_SEQUENCE_REGEX_EXTENDED})+$ ]]
+}
+
+# clear_escape_sequences [${1}]
+#
+#   Description ->  Remove the escape sequences from [${1}] and print it afterwards.
+#
+#   [${1}]      ->  String that will be printed without its escape sequences.
+#
+#   return      ->  Always return 0.
+#
+function clear_escape_sequences()
+{
+    echo -ne "${1}" | sed "s/${ESCAPE_SEQUENCE_REGEX}//g"
+}
+
+# is_color [${1}]
+#
+#   Description ->  Check if [${1}] is made just from the color escape sequences.
+#
+#   [${1}]      ->  String to be checked as a color escape sequence.
+#
+#   return      ->  Return 0 if the whole string is made just from the color escape sequences.
+#                   Return 1 otherwise.
+#
+function is_color()
+{
+    [[ "${1}" =~ ^(${COLOR_REGEX_EXTENDED})+$ ]]
+}
+
+# clear_colors [${1}]
+#
+#   Description ->  Remove the color escape sequences from [${1}] and print it afterwards.
+#
+#   [${1}]      ->  String that will be printed without its color escape sequences.
+#
+#   return      ->  Always return 0.
+#
+function clear_colors()
+{
+    echo -ne "${1}" | sed "s/${COLOR_REGEX}//g"
+}
+
+# TODO: Reimplement and improve when you learn awk.
+# optimize_colors [${1}]
+#
+#   Description ->  Optimize the color escape sequences in the string [${1}] by:
+#                   1) Joining them in one if they are used on the same part of the string.
+#                   2) Removing the redundant values in those joined color escape sequences.
+#                   3) TODO: Removing the redundant values across multiple escape sequences.
+#
+#   [${1}]      ->  String that will be printed once its color escape sequences are optimized.
+#
+#   return      ->  Always return 0.
+#
+function optimize_colors()
+{
+    local modular_color_regex="\[((([01]|[34][0-7]);)*)([01]|[34][0-7])m"
+    echo -ne "${1}" | sed -zr "
+                               : join_color_sequences_separated_by_space_characters
+                               s/(${COLOR_REGEX_EXTENDED})([[:space:]]+)/\5\1/g
+                               s/${modular_color_regex}${modular_color_regex}/[\1\4;\5\8m/g
+                               t join_color_sequences_separated_by_space_characters
+
+                               # Get every color sequence in separate line for easier use of sed.
+                               s/(${COLOR_REGEX_EXTENDED})/\n\1\n/g"   \
+                    | sed -r  "
+                               # For every color escape sequence in a separate line:
+                               /^${COLOR_REGEX_EXTENDED}$/ {
+                                   # Clear everything before last reset value.
+                                   s/(\[).*;(0[;m].*)/\1\2/
+
+                                   : clear_redundant_bold_values
+                                   s/([^34])1;(.*[^34]1[;m].*)/\1\2/
+                                   t clear_redundant_bold_values
+                                   s/(;1)*/\1/g
+
+                                   : clear_redundant_foreground_colors
+                                   s/3[0-7];(.*3[0-7].*)/\1/
+                                   t clear_redundant_foreground_colors
+
+                                   : clear_redundant_background_colors
+                                   s/4[0-7];(.*4[0-7].*)/\1/
+                                   t clear_redundant_background_colors
+
+                                   # Clear reset value if every part of it is redefined afterwords.
+                                   s/0;(.+;.+;.+)/\1/
+
+                                   # Sort values in order: [reset] [bold] [foreground] [background]
+                                   s/(.*)(3[0-7]);(.*)m/\1\3;\2m/
+                                   s/(.*)(4[0-7]);(.*)m/\1\3;\2m/
+                               }"  \
+                    | sed -zr "
+                               # Remove new lines added for easier use of sed.
+                               s/\n(${COLOR_REGEX_EXTENDED})\n/\1/g"
+}
