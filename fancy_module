@@ -72,7 +72,6 @@ HIGHLIGHT_COLOR="${HIGHLIGHT_COLOR:-"${CYAN_FG}"}"     # Color used for highligh
 
 # If argument checkings aren't specified, disable them.
 CHECK_ARGS="${CHECK_ARGS:-"0"}"         # Flag that enables argument checking in MODULE FUNCIONS.
-DEV_CHECK_ARGS="${DEV_CHECK_ARGS:-"0"}" # Flag used for debugging of functions from "debug_module".
 
 # If argument checking is requested, load the "debug_module".
 (( CHECK_ARGS )) && load_modules "debug"
@@ -271,10 +270,10 @@ function print_subheader()
 
 # run ${1} [${2}...${N-1}] ${N}
 #
-#   Description         ->  Print the messages ${1} [... ${N-1}], where every second part of it is
+#   Description         ->  Print the message ${1} [... ${N-1}], where every second part is
 #                           highlighted. Then start the silent execution of the command ${N}.
 #                           While ${N} is being run, the simple "dot" animation will be playing.
-#                           After the ${N} command has finished, "Done" or "Failed" will be printed.
+#                           After the command ${N} has finished, "Done" or "Failed" will be printed.
 #                           In case of "Failed", exit code and stderr will also be provided.
 #
 #   ${1}                ->  Argument with 2 possible meanings:
@@ -282,7 +281,7 @@ function print_subheader()
 #                              (In this case, ${1} is not counted as the argument for highlighting)
 #                           2) Regular text that will be counted as argument when highlight occurs.
 #
-#   ${1} [... ${N}]     ->  Text where every argument with the odd index is printed in current
+#   ${1} [... ${N-1}]   ->  Text where every argument with the odd index is printed in current
 #                           style/color and every argument with the even index is highlighted.
 #                           (The first argument of the message is counted as 1)
 #
@@ -291,8 +290,6 @@ function print_subheader()
 #   <=  HIGHLIGHT_COLOR ->  If ${1} isn't a color, this color will be used for highlighting.
 #
 #   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
-#
-#   <=  DEV_CHECK_ARGS  ->  Flag that enables argument checking in dev_* functions in "debug_module"
 #
 #   return              ->  Exit with 1 if the arguments are invalid. [CHECK_ARGS]
 #                           Otherwise propagate the return code of the executed command ${N}.
