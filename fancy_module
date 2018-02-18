@@ -36,6 +36,7 @@
 #   print_header            ->  Prints the text in specified color between the 2 lines of dashes.
 #   print_subheader         ->  Prints the text in specified color between the 2 new lines.
 #   run                     ->  Prints message, executes command and writes the result and stderr.
+#   try                     ->  Calls *run* and exits with 1 if *run* doesn't return 0.
 
 ########################################### DEPENDENCIES ###########################################
 
@@ -274,7 +275,7 @@ function print_subheader()
 #                           highlighted. Then start the silent execution of the command ${N}.
 #                           While ${N} is being run, the simple "dot" animation will be playing.
 #                           After the command ${N} has finished, "Done" or "Failed" will be printed.
-#                           In case of "Failed", exit code and stderr will also be provided.
+#                           In case of "Failed", exit code and stderr of ${N} will also be provided.
 #
 #   ${1}                ->  Argument with 2 possible meanings:
 #                           1) Color sequence, describing the color for highlighting.
@@ -344,4 +345,45 @@ function run()
 
     # Propagate the return code.
     return "${retcode}"
+}
+
+# try ${1} [${2}...${N-1}] ${N}
+#
+#   Description         ->  Print the message ${1} [... ${N-1}], where every second part is
+#                           highlighted. Then start the silent execution of the command ${N}.
+#                           While ${N} is being run, the simple "dot" animation will be playing.
+#                           After the command ${N} has finished, "Done" or "Failed" will be printed.
+#                           In case of "Failed", exit code and stderr of ${N} will also be provided
+#                           and this function will exit with 1.
+#
+#   ${1}                ->  Argument with 2 possible meanings:
+#                           1) Color sequence, describing the color for highlighting.
+#                              (In this case, ${1} is not counted as the argument for highlighting)
+#                           2) Regular text that will be counted as argument when highlight occurs.
+#
+#   ${1} [... ${N-1}]   ->  Text where every argument with the odd index is printed in current
+#                           style/color and every argument with the even index is highlighted.
+#                           (The first argument of the message is counted as 1)
+#
+#   ${N}                ->  String that will be evaluated and executed as a bash script.
+#
+#   <=  HIGHLIGHT_COLOR ->  If ${1} isn't a color, this color will be used for highlighting.
+#
+#   <=  CHECK_ARGS      ->  Flag that enables argument checking in this function.
+#
+#   return              ->  Exit with 1 if:
+#                               1) The arguments are invalid. [CHECK_ARGS]
+#                               2) The command ${N} wasn't executed successfully.
+#                           Return 0 otherwise.
+#
+function try()
+{
+    # Guard from invalid arguments.
+    if (( CHECK_ARGS )); then
+        error_if_argc_is_smaller_then 2
+        error_if_invalid_message "${*: 1: $(( ${#} - 1 ))}"
+        error_if_invalid_bash_script "${@: -1}"
+    fi
+
+    run "${@}" || exit 1
 }
