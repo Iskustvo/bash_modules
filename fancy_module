@@ -308,43 +308,54 @@ function run()
     highlight_every_second "${@:1:$(( ${#} - 1 ))}"
     echo -n ":${NO_COLOR}    "
 
-    # Hide the cursor and start the "dot" animation in the background.
+    # Work in subshell to prevent job control outputs when used in interactive shells.
     (
-        tput civis
+        # Hide the cursor and do the "dot" animation in the background.
+        (
+            # When SIGINT is caught, print status, show cursor and kill yourself.
+            trap "error_message '[5DAborted[1A'; tput cnorm; trap - INT; kill -2 ${BASHPID}" INT
 
-        local dots='...'
-        local number_of_dots=0
-        while true; do
-            (( number_of_dots = (number_of_dots % 3) + 1 ))
-            printf "[3D${dots:0:${number_of_dots}}%$(( 3 - number_of_dots ))s"
-            sleep 0.25
-        done
-    ) &
+            # Hide cursor.
+            tput civis
 
-    # Execute the given string ${N} as a bash script and get its stderr and return value.
-    local stderr retcode
-    stderr="$(eval "${@: -1}" 2>&1 1>/dev/null)"
-    retcode="${?}"
+            # Do the "dot" animation.
+            local dots='...'
+            local number_of_dots=0
+            while true; do
+                (( number_of_dots = (number_of_dots % 3) + 1 ))
+                printf "[3D${dots:0:${number_of_dots}}%$(( 3 - number_of_dots ))s"
+                sleep 0.25
+            done
+        ) &
 
-    # Silently kill the dot animation in the background.
-    { kill "${!}" && wait "${!}"; } &> /dev/null
+        # When SIGINT is caught, wait for animation to stop and print status, then kill yourself.
+        trap "wait ${!}; trap - INT; kill -2 ${BASHPID}" INT
 
-    # Write the status of ${N} script, based on stderr and returned value.
-    if (( retcode == 0 )); then
-        highlight "${B_GREEN_FG}" '[3DDone\n'
-    else
-        error_message '[3DFailed' ' [' "${NO_COLOR} Exit status: ${B_RED_FG}${retcode}" ' ]'
-        if [ -n "${stderr}" ]; then
-            local dashes="$(print_dashes)"
-            error_message "${NO_COLOR}" "\nERROR\n${dashes}\n" "${stderr}" "\n${dashes}"
+        # Execute the given string ${N} as a bash script and get its stderr and return value.
+        local stderr retcode
+        stderr="$(eval "${@: -1}" 2>&1 1>/dev/null)"
+        retcode="${?}"
+
+        # Silently kill the "dot" animation in the background.
+        { kill "${!}" && wait "${!}"; } &> /dev/null
+
+        # Write the status of ${N} script, based on stderr and returned value.
+        if (( retcode == 0 )); then
+            highlight "${B_GREEN_FG}" '[3DDone\n'
+        else
+            error_message '[3DFailed' ' [' "${NO_COLOR} Exit status: ${B_RED_FG}${retcode}" ' ]'
+            if [ -n "${stderr}" ]; then
+                local dashes="$(print_dashes)"
+                error_message "${NO_COLOR}" "\nERROR\n${dashes}\n" "${stderr}" "\n${dashes}"
+            fi
         fi
-    fi
 
-    # Show currsor
-    tput cnorm
+        # Show cursor
+        tput cnorm
 
-    # Propagate the return code.
-    return "${retcode}"
+        # Propagate the return code.
+        exit "${retcode}"
+    )
 }
 
 # try ${1} [${2}...${N-1}] ${N}
