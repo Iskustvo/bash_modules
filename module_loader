@@ -55,7 +55,7 @@ BASH_MODULES_PATH="${BASH_MODULES_PATH:-"$(realpath "$(dirname "${BASH_SOURCE[0]
 #   =>  ${X}[_MODULE]_LOADED    ->  For each loaded module, variable like this is exported:
 #                                   ${X}='color_module' =>  COLOR_MODULE_LOADED
 #                                   ${X}='debug'        =>  DEBUG_MODULE_LOADED
-#                                   ${X}='fancy'        =>  FANCY_MODULE_LOADED
+#                                   ${X}='decorative'   =>  DECORATIVE_MODULE_LOADED
 #
 #   return                      ->  Exit with 1 if sourcing of any module fails.
 #                                   Return 0 otherwise.

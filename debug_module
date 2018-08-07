@@ -22,7 +22,7 @@
 
 ########################################### DESCRIPTION ############################################
 
-#   This module is desined to help with error prevention as well as debugging process.
+#   This module is designed to help with error prevention as well as debugging process.
 
 ####################################### AVAILABLE FUNCTIONS ########################################
 
@@ -74,7 +74,7 @@
 #   ->  Globals:    NO_COLOR, CYAN_FG, B_RED_FG, B_YELLOW_FG, B_BLUE_FG
 #   ->  Functions:  /
 
-# fancy_module:
+# decorative_module:
 #   ->  Globals:    /
 #   ->  Functions:  highlight, error_message, print_dashes
 
@@ -87,7 +87,7 @@ BASH_MODULES_PATH="${BASH_MODULES_PATH:-"$(realpath "$(dirname "${BASH_SOURCE[0]
 declare -F 'load_modules' &> /dev/null || { source "${BASH_MODULES_PATH}/module_loader" || exit 1; }
 
 # Load modules that are necessary for this one to work properly.
-load_modules "ANSI_escape" "color" "fancy"
+load_modules "ANSI_escape" "color" "decorative"
 
 # Enable bash debug mode which is necessery for this module to work properly.
 shopt -s extdebug
